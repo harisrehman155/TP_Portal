@@ -76,6 +76,13 @@ public class AdminController : ControllerBase
         return Ok(_response);
     }
 
+    [HttpGet("GenerateEmployeeInvoices")]
+    public async Task<ActionResult<ApiResponse>> GenerateEmployeeInvoices([Required][FromQuery] string month)
+    {
+        ApiResponse _response = await _adminRepository.GenerateEmployeeInvoicesAsync(month);
+        return Ok(_response);
+    }
+
     [HttpGet("GetUnpaidCustomerInvoices")]
     public async Task<ActionResult<ApiResponse>> GetUnpaidCustomerInvoices([Required][FromQuery] string month)
     {

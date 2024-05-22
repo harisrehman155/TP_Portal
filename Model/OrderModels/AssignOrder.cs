@@ -14,6 +14,7 @@ namespace TP_Portal.Model.OrderModels
         public DateTime StartTime { get; set; }
         public DateTime EndTime { get; set; }
         public bool IsCompleted { get; set; }
+        public bool IsPaidToEmployee { get; set; }
 
         //Foreign Keys
         public string? EmployeeId { get; set; }
@@ -23,6 +24,9 @@ namespace TP_Portal.Model.OrderModels
         public Guid OrderId { get; set; }
         [ForeignKey("OrderId")]
         public Order? Order { get; set; }
+
+        [ForeignKey("EmployeePricingId")]
+        public Guid? EmployeePricingId { get; set; }
 
         public Guid? PricingId { get; set; }
         [ForeignKey("PricingId")]

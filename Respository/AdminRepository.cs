@@ -1,7 +1,5 @@
-using System.ComponentModel;
 using System.Globalization;
 using Microsoft.AspNetCore.Identity;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TP_Portal.Context;
 using TP_Portal.Helper;
@@ -18,6 +16,7 @@ public interface IAdminRepository
     Task<ApiResponse> GetCustomerInvoicesWithDetailAsync(InvoiceRequest invoiceRequest);
     Task<ApiResponse> GetUnpaidCustomerInvoicesAsync(string month);
     Task<ApiResponse> GenerateCustomerInvoicesAsync(string month);
+    Task<ApiResponse> GenerateEmployeeInvoicesAsync(string month);
     Task<ApiResponse> AssignRoleToUsersAsync(List<AssignRoleToUsersViewModel> _assignRoleToUsersViewModels);
     Task<ApiResponse> AssignOrdersToEmployeeAsync(List<AssignOrderToEmployeeViewModel> assignOrderToEmployeeViewModel);
     Task<ApiResponse> SetOrderPricingAsync(List<AssignPricingToOrderVM> assignPricingToOrderVM);
@@ -29,11 +28,7 @@ public class AdminRepository : IAdminRepository
     private readonly RoleManager<IdentityRole> _roleManager;
     private readonly ApplicationDbContext _context;
 
-    public AdminRepository(
-        UserManager<ApplicationUser> userManager,
-        ApplicationDbContext context,
-        RoleManager<IdentityRole> roleManager
-    )
+    public AdminRepository(UserManager<ApplicationUser> userManager, ApplicationDbContext context, RoleManager<IdentityRole> roleManager)
     {
         _userManager = userManager;
         _context = context;
@@ -221,19 +216,29 @@ public class AdminRepository : IAdminRepository
                 return HelperFunc.MyApiResponse(false, StatusCodes.Status400BadRequest, "No orders provided for assignment!", new { });
             }
 
+            var assignOrderRecords = await _context.AssignOrders.ToListAsync();
+            var pricingTypeRecords = await _context.Pricing.ToListAsync();
             foreach (var order in response)
             {
                 if (string.IsNullOrEmpty(order.CustomPrice) && string.IsNullOrEmpty(order.PricingId))
                     return HelperFunc.MyApiResponse(false, StatusCodes.Status400BadRequest, "No Pricing was Selected!", new { });
 
                 var myOrder = await _context.Orders.Where(x => x.Id == new Guid(order.OrderId!)).FirstOrDefaultAsync();
-                var assignOrderRecord = await _context.AssignOrders.Where(x => x.Id == order.Id).FirstOrDefaultAsync();
-                var pricingType = await _context.Pricing.Where(x => x.Id == new Guid(order.PricingId!)).FirstOrDefaultAsync();
-                if (assignOrderRecord != null && pricingType != null && myOrder != null)
+                var assignOrderRecord = assignOrderRecords.Where(x => x.Id == order.Id).FirstOrDefault();
+                var customerPricing = await _context.Pricing.Where(x => x.Id == new Guid(order.PricingId!)).FirstOrDefaultAsync();
+
+                if (assignOrderRecord != null && customerPricing != null && myOrder != null)
                 {
+                    var employeePrincingType = pricingTypeRecords
+                            .Where(x => x.OrderTypeId == customerPricing!.OrderTypeId && x.CustomerId == order.EmployeeId)
+                            .FirstOrDefault();
+
+
                     myOrder.IsGivenPriced = true;
                     assignOrderRecord.PricingId = new Guid(order.PricingId);
-                    myOrder.OrderPrice = string.IsNullOrEmpty(order.CustomPrice) ? pricingType.DesignPrice : order.CustomPrice;
+                    assignOrderRecord.EmployeePricingId = customerPricing.Id;
+                    assignOrderRecord.IsPaidToEmployee = true;
+                    myOrder.OrderPrice = string.IsNullOrEmpty(order.CustomPrice) ? customerPricing.DesignPrice : order.CustomPrice;
                 }
                 else
                 {
@@ -376,7 +381,7 @@ public class AdminRepository : IAdminRepository
                     InvoiceExpiryDate = DateTime.Now.AddDays(7),
                     IsPaid = false,
                     Total = total.ToString(),
-                    // CustomerId = customerId // Assign CustomerId to the invoice if needed
+                    CustomerId = customerId // Assign CustomerId to the invoice if needed
                 };
 
                 // Update the InvoiceId for each order
@@ -384,6 +389,83 @@ public class AdminRepository : IAdminRepository
                 {
                     order.InvoiceId = invoice.Id;
                 }
+
+                invoices.Add(invoice);
+            }
+
+            // Add invoices to the context
+            await _context.Invoice.AddRangeAsync(invoices);
+
+            // Save changes to the orders and invoices
+            await _context.SaveChangesAsync();
+
+            return HelperFunc.MyApiResponse(true, StatusCodes.Status200OK, "Invoices generated successfully!", null);
+        }
+        catch (Exception ex)
+        {
+            return HelperFunc.MyApiResponse(false, StatusCodes.Status500InternalServerError, $"Exception occurred while generating invoices. Inner Exception: {ex.Message}", new { });
+        }
+    }
+
+    public async Task<ApiResponse> GenerateEmployeeInvoicesAsync(string month)
+    {
+        try
+        {
+            // Parse the month string to a DateTime object representing the start of the month
+            var startDate = DateTime.ParseExact(month, "MMMM-yyyy", CultureInfo.InvariantCulture);
+            // Calculate the end of the month
+            var endDate = startDate.AddMonths(1).AddDays(-1);
+
+            // Check if there are any orders in the given month whose price is not given
+            var ordersWithMissingPrices = await _context.Orders
+                .Where(order => !order.IsGivenPriced && order.IsCompleted && !order.IsPaid && order.IsAssigned &&
+                    order.InvoiceId == null && (order.Date >= startDate && order.Date <= endDate))
+                .AnyAsync();
+
+            if (ordersWithMissingPrices)
+            {
+                return HelperFunc.MyApiResponse(false, StatusCodes.Status400BadRequest, "Some orders in the given month do not have prices assigned.", null);
+            }
+
+            // Fetch all unpaid orders in the given month
+            var unPaidOrders = await (
+                from assignOrder in _context.AssignOrders
+                join price in _context.Pricing on assignOrder.EmployeePricingId equals price.Id
+                join order in _context.Orders on assignOrder.OrderId equals order.Id
+                join orderType in _context.OrderTypes on order.OrderTypeId equals orderType.Id
+                where assignOrder.IsPaidToEmployee && order.Date >= startDate && order.Date <= endDate
+                select new
+                {
+                    order,
+                    orderType,
+                    price,
+                    assignOrder
+                }).ToListAsync();
+
+            if (!unPaidOrders.Any())
+                return HelperFunc.MyApiResponse(false, StatusCodes.Status404NotFound, "No records found!", null);
+
+            var invoices = new List<Invoice>();
+
+            // Group orders by EmployeeId
+            var groupedOrders = unPaidOrders.GroupBy(x => x.assignOrder.EmployeeId);
+
+            foreach (var group in groupedOrders)
+            {
+                var EmployeeId = group.Key;
+                var orderRecords = group.Select(x => x.price).ToList();
+
+                var total = orderRecords.Sum(x => Convert.ToDecimal(x.DesignPrice));
+
+                var invoice = new Invoice
+                {
+                    Id = Guid.NewGuid(),
+                    InvoiceDate = DateTime.Now,
+                    InvoiceExpiryDate = DateTime.Now.AddDays(7),
+                    IsPaid = false,
+                    Total = total.ToString(),
+                    CustomerId = EmployeeId // Assign CustomerId to the invoice if needed
+                };
 
                 invoices.Add(invoice);
             }
