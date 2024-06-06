@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
@@ -36,6 +37,12 @@ public class AuthenticationController : ControllerBase
         ApiResponse _response = await _authencationRepository.LoginUserAsync(loginViewModel);
         return Ok(_response);
     }
+    [HttpGet("logout")]
+    public async Task<ActionResult> Logout()
+    {
+        ApiResponse _response = await _authencationRepository.LogoutUserAsync();
+        return Ok(_response);
+    }
 
     [HttpGet("ConfirmEmail")]
     public async Task<IActionResult> ConfirmEmail(string token, string email)
@@ -54,9 +61,9 @@ public class AuthenticationController : ControllerBase
     }
 
     [HttpGet("ResetPassword")]
-    public async Task<IActionResult> ResetPassword(string email,string token)
+    public async Task<IActionResult> ResetPassword(string email, string token)
     {
-        ApiResponse _response = await _authencationRepository.ResetPasswordAsync(email,token);
+        ApiResponse _response = await _authencationRepository.ResetPasswordAsync(email, token);
         return Ok(_response);
     }
 

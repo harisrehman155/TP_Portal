@@ -15,6 +15,7 @@ public interface IAuthenticationRepository
 {
     Task<ApiResponse> RegisterUserAsync(RegisterViewModel registerViewModel, string baseUrl);
     Task<ApiResponse> LoginUserAsync(LoginViewModel loginViewModel);
+    Task<ApiResponse> LogoutUserAsync();
     Task<ApiResponse> ConfirmEmailAsync(string token, string email, string baseUrl);
     Task<ApiResponse> ForgotPasswordAsync(string email, string baseUrl);
     Task<ApiResponse> ResetPasswordAsync(string email, string token);
@@ -26,12 +27,14 @@ public class AuthenticationRepository : IAuthenticationRepository
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly IConfiguration _configuration;
     private readonly IEmailService _emailService;
+    private readonly SignInManager<ApplicationUser> _signInManager;
 
-    public AuthenticationRepository(UserManager<ApplicationUser> userManager, IConfiguration configuration, IEmailService emailService)
+    public AuthenticationRepository(UserManager<ApplicationUser> userManager, IConfiguration configuration, IEmailService emailService, SignInManager<ApplicationUser> signInManager)
     {
         _userManager = userManager;
         _configuration = configuration;
         _emailService = emailService;
+        _signInManager = signInManager;
     }
 
     public async Task<ApiResponse> LoginUserAsync(LoginViewModel loginViewModel)
@@ -72,6 +75,19 @@ public class AuthenticationRepository : IAuthenticationRepository
                     token = _token,
                     expiration = jwtToken.ValidTo
                 });
+        }
+        catch (Exception ex)
+        {
+            return HelperFunc.MyApiResponse(false, StatusCodes.Status500InternalServerError, $"Exception Occured, While Creating User. Inner Exception : {ex.Message}", new { });
+        }
+    }
+
+    public async Task<ApiResponse> LogoutUserAsync()
+    {
+        try
+        {
+            await _signInManager.SignOutAsync();
+            return HelperFunc.MyApiResponse(true, StatusCodes.Status200OK, "User Logout Successfully!", null);
         }
         catch (Exception ex)
         {
@@ -139,7 +155,7 @@ public class AuthenticationRepository : IAuthenticationRepository
             }
             else if (result.Errors.Count() > 0)
             {
-                GenerateEmailConfirmationToken(user,baseUrl);
+                GenerateEmailConfirmationToken(user, baseUrl);
                 return HelperFunc.MyApiResponse(true, StatusCodes.Status200OK, "Token Expired, New Link has been sent to Email", new { });
             }
         }
